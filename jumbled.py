@@ -20,9 +20,12 @@ def display_results(summary):
     Displays the final email summary in a formatted way
     Args: summary (str) - The AI-generated summary to display
     """
-    print("\n===== 📩 Email Summary =====\n")
-    print(summary)
-    print("\n============================")
+    separator = "=" * 30
+    print(f"\n{separator}")
+    print("📩 EMAIL SUMMARY REPORT 📩")
+    print(separator)
+    print(f"\n{summary}")
+    print(f"\n{separator}\n")
 
 # ========== CODE BLOCK 2 ==========
 def get_emails(service, days=5):
@@ -32,21 +35,40 @@ def get_emails(service, days=5):
           days (int) - Number of days back to fetch emails (default: 5)
     Returns: str - Combined email content (subjects and snippets)
     """
-    date_from = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).strftime('%Y/%m/%d')
-    query = f'after:{date_from}'
-
-    result = service.users().messages().list(userId='me', q=query).execute()
-    messages = result.get('messages', [])
-
-    emails = []
-    for msg in messages[:5]:  # limit to last 5 emails for speed
-        msg_data = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
-        payload = msg_data['payload']
-        headers = payload.get('headers', [])
-        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-        snippet = msg_data.get('snippet')
-        emails.append(f"Subject: {subject}\nSnippet: {snippet}\n---")
-    return "\n\n".join(emails)
+    # Calculate the date range
+    current_time = datetime.datetime.utcnow()
+    past_date = current_time - datetime.timedelta(days=days)
+    search_date = past_date.strftime('%Y/%m/%d')
+    
+    # Build search query
+    search_query = f'after:{search_date}'
+    
+    # Get message list
+    response = service.users().messages().list(userId='me', q=search_query).execute()
+    message_list = response.get('messages', [])
+    
+    # Process emails
+    email_content = []
+    for message in message_list[:5]:  # Process first 5 emails
+        full_message = service.users().messages().get(userId='me', id=message['id'], format='full').execute()
+        message_payload = full_message['payload']
+        message_headers = message_payload.get('headers', [])
+        
+        # Extract subject
+        email_subject = 'No Subject'
+        for header in message_headers:
+            if header['name'] == 'Subject':
+                email_subject = header['value']
+                break
+        
+        # Get snippet
+        email_snippet = full_message.get('snippet')
+        
+        # Format email entry
+        email_entry = f"Subject: {email_subject}\nSnippet: {email_snippet}\n---"
+        email_content.append(email_entry)
+    
+    return "\n\n".join(email_content)
 
 # ========== CODE BLOCK 3 ==========
 def get_gmail_service():
@@ -55,17 +77,25 @@ def get_gmail_service():
     Handles OAuth2 flow and token management
     Returns: Gmail service object for API calls
     """
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-        creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-
-    service = build('gmail', 'v1', credentials=creds)
-    return service
+    credentials = None
+    token_file = 'token.json'
+    
+    # Load existing credentials if available
+    if os.path.exists(token_file):
+        credentials = Credentials.from_authorized_user_file(token_file, SCOPES)
+    
+    # Refresh or create new credentials
+    if not credentials or not credentials.valid:
+        oauth_flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+        credentials = oauth_flow.run_local_server(port=0)
+        
+        # Save credentials for future use
+        with open(token_file, 'w') as token_writer:
+            token_writer.write(credentials.to_json())
+    
+    # Build and return Gmail service
+    gmail_service = build('gmail', 'v1', credentials=credentials)
+    return gmail_service
 
 # ========== CODE BLOCK 4 ==========
 def summarize_text(text):
@@ -74,12 +104,21 @@ def summarize_text(text):
     Args: text (str) - Combined email content to summarize
     Returns: str - AI-generated summary with bullet points
     """
-    client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+    # Get API key from environment
+    api_key = os.getenv('GEMINI_API_KEY')
     
-    response = client.models.generate_content(
+    # Initialize Gemini client
+    gemini_client = genai.Client(api_key=api_key)
+    
+    # Create prompt for summarization
+    prompt = f"Summarize the following emails into a concise, line-by-line bulleted list. Each summary point should start with a bullet point (*).\n\n{text}"
+    
+    # Generate summary using Gemini
+    ai_response = gemini_client.models.generate_content(
         model="gemini-1.5-flash",
-        contents=f"Summarize the following emails into a concise, line-by-line bulleted list. Each summary point should start with a bullet point (*).\n\n{text}"
+        contents=prompt
     )
     
-    summary = response.text
-    return summary
+    # Extract and return summary text
+    email_summary = ai_response.text
+    return email_summary
